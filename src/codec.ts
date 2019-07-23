@@ -1,13 +1,22 @@
+/** Base64 encoding alphabet and = for padding. */
 const chars64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+
+/** Map Base64 sextet to encoded character. */
 const toBase64: string[] = [];
+
+/** Map ASCII code of encoded character to Base64 sextet. */
 const fromBase64: number[] = [];
+
+// Fill Base64 character mapping tables.
 
 for(let i = 0; i < 65; ++i) {
 	toBase64[i] = chars64.charAt(i);
 	fromBase64[chars64.charCodeAt(i)] = i;
 }
 
-/** (0xd800 << 10) + 0xdc00 - 0x10000 */
+/** Subtract from shifted and summed UTF-16 surrogate pair code units to get
+  * correct Unicode code point. Equals:
+  * (0xd800 << 10) + 0xdc00 - 0x10000 */
 const surrogateOffset = 0x35fdc00;
 
 export type ArrayType = number[] | Uint8Array | Buffer;
@@ -22,6 +31,8 @@ export function encodeUTF8(
 ): number;
 
 /** UTF-8 encode a string to an array of bytes.
+  * This transform is reversible for any input string,
+  * regardless of strange or invalid characters.
   *
   * @param src String to encode.
   * @param dst Destination array or buffer for storing the result.
@@ -56,12 +67,18 @@ export function encodeUTF8(
 				a = 0b11100000;
 				b = 0b10000000;
 
+				// Note: code <= 0xffff because JavaScript API exposes strings
+				// only as a 16-bit, UTF-16 encoded buffer.
+
 				if((code - 0xd800 & 0xfc00) == 0) {
 					// Surrogate pair first half.
 					const next = src.charCodeAt(srcPos) || 0;
 
 					if((next - 0xdc00 & 0xfc00) == 0) {
-						// Surrogate pair second half.
+						// Surrogate pair second half. Re-encode only if both
+						// halves are in the valid range. Otherwise store them
+						// as-is, to avoid altering decoded result.
+
 						a = 0b10000000;
 						code = (code << 10) + next - surrogateOffset;
 						dst[dstPos++] = 0b11110000 | (code >> 18);
@@ -83,6 +100,7 @@ export function encodeUTF8(
 }
 
 /** Base64 encode a string or numeric array to string.
+  * Input strings will be first re-encoded in UTF-8.
   *
   * @param src String or array to encode.
   * @param dst Output string prefix, default is empty.
@@ -110,8 +128,9 @@ export function encode64(
 		dst += (
 			toBase64[a >> 2] +
 			toBase64[((a & 0b11) << 4) | (b >> 4)] +
-			// Insert padding if necessary:
+			// Insert padding if input ran out:
 			// (~(~n + n) & 64) converts undefined to 64, everything else to 0.
+			// Note: undefined == NaN == 0 in bitwise operations.
 			toBase64[(~(~b + b) & 64) | ((b & 0b1111) << 2) | (c >> 6)] +
 			toBase64[(~(~c + c) & 64) | (c & 0b111111)]
 		);
@@ -129,7 +148,8 @@ export function decodeVLQ(
 	srcEnd?: number
 ): number;
 
-/** Decode a string containing Base64 variable-length quantities.
+/** Decode a string containing Base64 variable-length quantities,
+  * as seen in source maps.
   *
   * @param src String to decode.
   * @param dst Destination array for storing the result.
@@ -207,7 +227,7 @@ export class Hasher32 {
 
 		this.crc = crc;
 
-		return(~crc >>> 0);
+		return ~crc >>> 0;
 	}
 
 	crc = ~0;

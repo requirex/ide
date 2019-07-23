@@ -1,17 +1,30 @@
 import { ArrayType, encodeUTF8, CRC32 } from './codec';
 import { WriterLittle } from './Writer';
 
+/** General purpose bit flags, documented for interest. */
+
 const enum ZipFlag {
+	/** If set, file contents are encrypted. */
 	ENCRYPT = 1,
+	/** If set, CRC and sizes go in a descriptor section after file
+	  * contents, which were probably of unknown size prior to streaming
+	  * directly from elsewhere. */
 	STREAM = 1 << 3,
+	/** Language encoding flag (EFS) signal file name and contents are
+	  * encoded in UTF-8. */
 	UTF8 = 1 << 11
 }
 
+/** Compression methods (partial list). */
+
 const enum ZipMethod {
+	/** Contents as-is, without compression. */
 	STORE = 0,
 	DEFLATE = 8,
 	LZMA = 14
 }
+
+/** Operating system used to generate the archive (partial list). */
 
 const enum ZipOS {
 	DOS = 0,
@@ -21,10 +34,14 @@ const enum ZipOS {
 	OSX = 19
 }
 
+/** File attributes for compression software internal use. */
+
 const enum ZipAttr {
 	BINARY = 0,
 	TEXT = 1
 }
+
+/** POSIX file type (partial list). */
 
 const enum PosixType {
 	FIFO = 1,
@@ -34,16 +51,22 @@ const enum PosixType {
 	SOCKET = 12
 }
 
-const crcFactory = new CRC32();
+/** Magic numbers to identify file sections. */
 
-const zipMagic = 0x04034b50;
-const entryMagic = 0x02014b50;
-const endMagic = 0x06054b50;
+const enum Magic {
+	START = 0x04034b50,
+	ITEM = 0x02014b50,
+	END = 0x06054b50
+}
+
+/** CRC polynomial used to verify integrity of each archived file. */
+
+const crcFactory = new CRC32();
 
 export class ZipFile {
 
 	add(
-		name: string | ArrayType,
+		path: string | ArrayType,
 		data: string | ArrayType,
 		mode = 0o644,
 		stamp?: number | null,
@@ -52,12 +75,14 @@ export class ZipFile {
 		const { content, directory } = this;
 		const date = stamp ? new Date(stamp) : new Date();
 
-		if(typeof name == 'string') name = encodeUTF8(name);
+		if(typeof path == 'string') path = encodeUTF8(path);
 		if(typeof data == 'string') data = encodeUTF8(data);
 		if(typeof comment == 'string') comment = encodeUTF8(comment);
 
 		const version = 10;
 		const flags = ZipFlag.UTF8;
+		/** DOS internal date encoding format lives on, here.
+		  * Notably accurate only to 2 seconds. */
 		const time = (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1);
 		const day = (date.getFullYear() - 1980 << 9) | (date.getMonth() + 1 << 5) | date.getDate();
 		const crc = crcFactory.create().append(data);
@@ -68,7 +93,7 @@ export class ZipFile {
 		const unixAttr = (PosixType.FILE << 12) | mode;
 		const headerOffset = content.pos;
 
-		content.u32(zipMagic);
+		content.u32(Magic.START);
 
 		const metaStart = content.pos;
 
@@ -77,20 +102,20 @@ export class ZipFile {
 			.u16(flags).u16(ZipMethod.STORE)
 			.u16(time).u16(day)
 			.u32(crc).u32(size).u32(size)
-			.u16(name.length).u16(extra.length)
+			.u16(path.length).u16(extra.length)
 		);
 
 		const metaEnd = content.pos;
 
-		content.copy(name).copy(extra).copy(data);
+		content.copy(path).copy(extra).copy(data);
 
 		(directory
-			.u32(entryMagic).u16(version | (ZipOS.UNIX << 8))
+			.u32(Magic.ITEM).u8(version).u8(ZipOS.UNIX)
 			.copy(content.data, metaStart, metaEnd)
 			.u16(comment.length)
 			.u16(diskNumber)
 			.u16(ZipAttr.BINARY).u16(dosAttr).u16(unixAttr).u32(headerOffset)
-			.copy(name).copy(extra).copy(comment)
+			.copy(path).copy(extra).copy(comment)
 		);
 
 		++this.count;
@@ -107,7 +132,7 @@ export class ZipFile {
 
 		(content
 			.copy(directory.data)
-			.u32(endMagic)
+			.u32(Magic.END)
 			.u16(diskNumber).u16(diskNumber)
 			.u16(count).u16(count)
 			.u32(dirSize).u32(dirOffset)
